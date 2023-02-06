@@ -18,6 +18,7 @@ import { useServer as useWsServer } from 'graphql-ws/lib/use/ws';
 import { ApolloServerPluginDrainHttpServer } from 'apollo-server-core';
 
 import { PubSub } from 'graphql-subscriptions';
+import bcrypt from 'bcryptjs';
 
 const pubsub = new PubSub();
 const prisma = new PrismaClient();
@@ -46,14 +47,13 @@ app.use(
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
-
   const user = await prisma.user.findUnique({
     where: {
       email,
     },
   });
-
-  if (user && user.password === password) {
+  const valid = await bcrypt.compare(password, user.password);
+  if (user && valid) {
     const token = jwt.sign({ sub: user.id }, JWT_SECRET);
     res.json({ token });
   } else {
@@ -64,20 +64,22 @@ app.post('/login', async (req, res) => {
 const getHttpContext = async ({ req }) => {
   // find the user by the id in the JWT token and add it to the context
   // auth is added by express-jwt if the authorization header is present => req.auth Authorization header - Bearer token
-
   const user =
     req.auth && (await prisma.user.findUnique({ where: { id: req.auth.sub } }));
 
-  return { user };
+  if (user) return { user, prisma, pubsub };
+
+  return { prisma, bcrypt };
 };
 
 // Create a context function that returns the token from the connection WebSocket headers
 const getWsContext = ({ connectionParams }) => {
-  const token = connectionParams?.accessToken;
+  const token = connectionParams?.Authorization?.replace('Bearer ', '');
   if (token) {
     // Verify the token and return the userId
     const payload = jwt.verify(token, JWT_SECRET);
-    return { userId: payload.sub };
+    const user = prisma.user.findUnique({ where: { id: payload.sub } });
+    if (user) return { user, prisma, pubsub };
   }
   return {};
 };
@@ -99,11 +101,11 @@ const schema = makeExecutableSchema({
 });
 
 // Use the WebSocket server to handle GraphQL subscriptions
-useWsServer({ schema, context: { getWsContext, prisma, pubsub } }, wsServer);
+useWsServer({ schema, context: getWsContext }, wsServer);
 
 const apolloServer = new ApolloServer({
   schema,
-  context: { getHttpContext, prisma, pubsub },
+  context: getHttpContext,
   plugins: [ApolloServerPluginDrainHttpServer({ httpServer })],
 });
 

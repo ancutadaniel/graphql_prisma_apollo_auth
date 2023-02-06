@@ -1,5 +1,5 @@
 const Mutation = {
-  createUser: async (parent, args, { prisma }, info) => {
+  createUser: async (parent, args, { prisma, bcrypt }, info) => {
     const { data } = args;
     const emailExists = await prisma.user.findUnique({
       where: {
@@ -9,11 +9,16 @@ const Mutation = {
 
     if (emailExists) throw new Error('Email already exists.');
 
+    if (data.password.length < 8)
+      throw new Error('Password must be at least 8 characters long.');
+
+    const passwordHash = await bcrypt.hash(data.password, 10);
+
     return prisma.user.create({
       data: {
         email: data.email,
         name: data.name,
-        password: data.password,
+        password: passwordHash,
       },
     });
   },
