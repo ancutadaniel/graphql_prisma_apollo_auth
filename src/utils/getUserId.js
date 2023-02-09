@@ -21,3 +21,9 @@ const getUserId = (req, requireAuth = true) => {
 };
 
 export default getUserId;
+
+// eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjbGR1bDhuYzEwMDAwNGJpajB2dXNzZGFuIiwiaWF0IjoxNjc1Nzk1Mjc3fQ.1lhFDvjA4X20ke-NuSxVaIkPXy7o7DTfYayQnspkuMQ
+// eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjbGR1bGJydDMwMDAwNGJsaGFlc2FqMzkxIiwiaWF0IjoxNjc1Nzk1NDIyfQ.e2OLafCqAPmI_iMIPZ9nspfxv55Gu48Uw7rPxmI7cPY
+
+// user test1@test.com password test1234
+// Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjbGR1bGJydDMwMDAwNGJsaGFlc2FqMzkxIiwiaWF0IjoxNjc1OTY1NTE5LCJleHAiOjE2NzY1NzAzMTl9.mVV1WO1iA8lKdV_jUIoDsazbm5dWfO1DCwfqYctIYVE

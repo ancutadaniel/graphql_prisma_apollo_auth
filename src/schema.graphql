@@ -1,8 +1,8 @@
 type Query {
-  allUsers(query: String): [User!]!
-  allPosts(query: String): [Post!]!
-  myPosts(query: String): [Post!]!
-  allComments(query: String): [Comment!]!
+  allUsers(query: String, take: Int, skip: Int): [User!]!
+  allPosts(query: String, take: Int, skip: Int): [Post!]!
+  myPosts(query: String, take: Int, skip: Int, cursor: String): [Post!]!
+  allComments(query: String, take: Int, skip: Int): [Comment!]!
   user: User!
   post(id: String!): Post!
 }
@@ -14,6 +14,8 @@ type User {
   password: String
   posts: [Post!]!
   comments: [Comment!]!
+  createdAt: String!
+  updatedAt: String!
 }
 
 type Post {
@@ -23,6 +25,8 @@ type Post {
   published: Boolean!
   author: User!
   comments: [Comment!]!
+  createdAt: String!
+  updatedAt: String!
 }
 
 type Comment {
@@ -30,6 +34,8 @@ type Comment {
   text: String!
   author: User!
   post: Post!
+  createdAt: String!
+  updatedAt: String!
 }
 
 # ======================  Mutations  ======================
