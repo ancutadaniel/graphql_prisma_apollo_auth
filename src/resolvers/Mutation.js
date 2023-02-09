@@ -1,5 +1,34 @@
+import bcrypt from 'bcryptjs';
+import getUserId from '../utils/getUserId.js';
+import postExists from '../utils/postExists.js';
+import generateToken from '../utils/generateToken.js';
+import hashPassword from '../utils/hashPassword.js';
+
 const Mutation = {
-  createUser: async (parent, args, { prisma, bcrypt }, info) => {
+  login: async (parent, args, { prisma }, info) => {
+    const {
+      data: { email, password },
+    } = args;
+    const user = await prisma.user.findUnique({
+      where: {
+        email,
+      },
+    });
+
+    if (!user) throw new Error('Unable to login.');
+
+    const valid = await bcrypt.compare(password, user.password);
+
+    if (!valid) throw new Error('Unable to login.');
+
+    if (user && valid) {
+      const token = generateToken(user.id);
+      // Remove the password from the user object before returning it
+      const { password, ...userWithoutPassword } = user;
+      return { user: userWithoutPassword, token };
+    }
+  },
+  createUser: async (parent, args, { prisma }, info) => {
     const { data } = args;
     const emailExists = await prisma.user.findUnique({
       where: {
@@ -9,21 +38,25 @@ const Mutation = {
 
     if (emailExists) throw new Error('Email already exists.');
 
-    if (data.password.length < 8)
-      throw new Error('Password must be at least 8 characters long.');
-
-    const passwordHash = await bcrypt.hash(data.password, 10);
-
-    return prisma.user.create({
+    const user = await prisma.user.create({
       data: {
         email: data.email,
         name: data.name,
-        password: passwordHash,
+        password: await hashPassword(data.password),
       },
     });
+
+    // Remove the password from the user object before returning it
+    const { password, ...userWithoutPassword } = user;
+
+    return {
+      user: userWithoutPassword,
+      token: generateToken(user.id),
+    };
   },
-  updateUser: async (parent, args, { prisma }, info) => {
-    const { id, data } = args;
+  updateUser: async (parent, args, { prisma, req }, info) => {
+    const id = getUserId(req);
+    const { data } = args;
     const userExists = await prisma.user.findUnique({
       where: {
         id,
@@ -32,18 +65,33 @@ const Mutation = {
 
     if (!userExists) throw new Error('User not found.');
 
-    return prisma.user.update({
+    // If the user is updating their password, hash it
+    if (
+      data.password &&
+      data.password.length > 0 &&
+      data.password !== userExists.password &&
+      typeof data.password === 'string'
+    ) {
+      data.password = await hashPassword(data.password);
+    }
+
+    // Remove the password from the user object before returning it
+    const { password, ...userWithoutPassword } = userExists;
+
+    await prisma.user.update({
       where: {
         id,
       },
       data: {
-        email: data.email,
-        name: data.name,
+        ...data,
       },
     });
+
+    return userWithoutPassword;
   },
-  deleteUser: async (parent, args, { prisma }, info) => {
-    const { id } = args;
+  deleteUser: async (parent, args, { prisma, req }, info) => {
+    const id = getUserId(req);
+
     const userExists = await prisma.user.findUnique({ where: { id } });
 
     if (!userExists) throw new Error('User not found.');
@@ -88,7 +136,9 @@ const Mutation = {
       },
     });
   },
-  createPost: async (parent, args, { prisma, pubsub }, info) => {
+  createPost: async (parent, args, { prisma, pubsub, req }, info) => {
+    const userId = getUserId(req);
+
     const { data } = args;
     const post = await prisma.post.create({
       data: {
@@ -97,7 +147,7 @@ const Mutation = {
         published: data.published,
         author: {
           connect: {
-            id: data.authorId,
+            id: userId,
           },
         },
       },
@@ -115,106 +165,139 @@ const Mutation = {
           data: post,
         },
       });
-    }
-
-    return post;
-  },
-  updatePost: async (parent, args, { prisma, pubsub }, info) => {
-    const { id, data } = args;
-    const post = await prisma.post.update({
-      where: {
-        id,
-      },
-      data: {
-        title: data.title,
-        body: data.body,
-        published: data.published,
-      },
-      include: {
-        author: true,
-        comments: true,
-      },
-    });
-
-    if (!post) throw new Error('Post not found.');
-    // store the original post
-    const originalPost = { ...post };
-
-    if (originalPost.published && !post.published) {
-      // Post was published and now it's not - DELETED
-      pubsub.publish('post', {
-        post: {
-          mutation: 'DELETED',
-          data: originalPost,
-        },
-      });
-    } else if (!originalPost.published && post.published) {
-      // Post was not published and now it's published - CREATED
-      pubsub.publish('post', {
-        post: {
+      pubsub.publish('myPost', {
+        myPost: {
           mutation: 'CREATED',
           data: post,
         },
       });
-    } else if (originalPost.published && post.published) {
-      // Post was published and now it's published - UPDATED
-      pubsub.publish('post', {
-        post: {
-          mutation: 'UPDATED',
-          data: post,
-        },
-      });
     }
 
     return post;
   },
-  deletePost: async (parent, args, { prisma, pubsub }, info) => {
-    const { id } = args;
-    const postExists = await prisma.post.findUnique({ where: { id } });
+  updatePost: async (parent, args, { prisma, pubsub, req }, info) => {
+    const userId = getUserId(req);
+    const { id, data } = args;
 
-    if (!postExists) throw new Error('Post not found.');
+    const postOK = await postExists(id, userId, prisma);
 
-    // Delete the post's associated comments
-    const comments = await prisma.comment.findMany({
-      where: {
-        postId: id,
-      },
-    });
-
-    // commentIds is an array of comment ids that we want to delete
-    const commentIds = comments.map((comment) => comment.id);
-    await prisma.comment.deleteMany({
-      where: {
-        id: {
-          in: commentIds,
-        },
-      },
-    });
-
-    if (postExists.published) {
-      // Publish the post to the subscription
-      pubsub.publish('post', {
-        post: {
-          mutation: 'DELETED',
-          data: postExists,
+    // If the post is published and the user wants to unpublish it delete all the comments
+    if (postOK.published !== data.published) {
+      await prisma.comment.deleteMany({
+        where: {
+          postId: id,
         },
       });
     }
-    // Delete the post
-    return prisma.post.delete({
+
+    if (postOK) {
+      const post = await prisma.post.update({
+        where: {
+          id,
+        },
+        data: {
+          ...data,
+        },
+        include: {
+          author: true,
+          comments: true,
+        },
+      });
+
+      const originalPost = { ...post };
+
+      if (originalPost.published && !post.published) {
+        // Post was published and now it's not - DELETED
+        pubsub.publish('post', {
+          post: {
+            mutation: 'DELETED',
+            data: originalPost,
+          },
+        });
+      } else if (!originalPost.published && post.published) {
+        // Post was not published and now it's published - CREATED
+        pubsub.publish('post', {
+          post: {
+            mutation: 'CREATED',
+            data: post,
+          },
+        });
+      } else if (originalPost.published && post.published) {
+        // Post was published and now it's published - UPDATED
+        pubsub.publish('post', {
+          post: {
+            mutation: 'UPDATED',
+            data: post,
+          },
+        });
+      }
+
+      return post;
+    }
+  },
+  deletePost: async (parent, args, { prisma, pubsub, req }, info) => {
+    const userId = getUserId(req);
+    const { id } = args;
+
+    const post = await postExists(id, userId, prisma);
+
+    if (post) {
+      // Delete the post's associated comments
+      const comments = await prisma.comment.findMany({
+        where: {
+          postId: id,
+        },
+      });
+
+      // commentIds is an array of comment ids that we want to delete
+      const commentIds = comments.map((comment) => comment.id);
+      await prisma.comment.deleteMany({
+        where: {
+          id: {
+            in: commentIds,
+          },
+        },
+      });
+
+      if (post.published) {
+        // Publish the post to the subscription
+        pubsub.publish('post', {
+          post: {
+            mutation: 'DELETED',
+            data: postExists,
+          },
+        });
+      }
+
+      // Delete the post
+      return prisma.post.delete({
+        where: {
+          id,
+        },
+      });
+    }
+  },
+  createComment: async (parent, args, { prisma, pubsub, req }, info) => {
+    const userId = getUserId(req);
+    const { data } = args;
+
+    const postPublished = await prisma.post.findUnique({
       where: {
-        id,
+        id: data.postId,
+      },
+      select: {
+        published: true,
       },
     });
-  },
-  createComment: async (parent, args, { prisma, pubsub }, info) => {
-    const { data } = args;
+
+    if (!postPublished) throw new Error('Post not found.');
+
     const comment = await prisma.comment.create({
       data: {
         text: data.text,
         author: {
           connect: {
-            id: data.authorId,
+            id: userId,
           },
         },
         post: {
@@ -239,52 +322,76 @@ const Mutation = {
 
     return comment;
   },
-  updateComment: async (parent, args, { prisma, pubsub }, info) => {
+  updateComment: async (parent, args, { prisma, pubsub, req }, info) => {
+    const userId = getUserId(req);
     const { id, data } = args;
-    const comment = await prisma.comment.update({
+
+    const commentExists = await prisma.comment.findUnique({
       where: {
-        id,
-      },
-      data: {
-        text: data.text,
-      },
-      include: {
-        author: true,
-        post: true,
+        id: id,
       },
     });
 
-    // Publish the comment to the subscription
-    pubsub.publish(`comment ${comment.postId}`, {
-      comment: {
-        mutation: 'UPDATED',
-        data: comment,
-      },
-    });
+    if (commentExists.authorId !== userId)
+      throw new Error('Not authorized to perform this action.');
+    else {
+      const comment = await prisma.comment.update({
+        where: {
+          id,
+        },
+        data: {
+          text: data.text,
+        },
+        include: {
+          author: true,
+          post: true,
+        },
+      });
 
-    return comment;
+      // Publish the comment to the subscription
+      pubsub.publish(`comment ${comment.postId}`, {
+        comment: {
+          mutation: 'UPDATED',
+          data: comment,
+        },
+      });
+
+      return comment;
+    }
   },
-  deleteComment: async (parent, args, { prisma, pubsub }, info) => {
+  deleteComment: async (parent, args, { prisma, pubsub, req }, info) => {
+    const userId = getUserId(req);
     const { id } = args;
-    const comment = await prisma.comment.delete({
+
+    const commentExists = await prisma.comment.findUnique({
       where: {
-        id,
-      },
-      include: {
-        author: true,
-        post: true,
+        id: id,
       },
     });
 
-    // Publish the comment to the subscription
-    pubsub.publish(`comment ${comment.postId}`, {
-      comment: {
-        mutation: 'DELETED',
-        data: comment,
-      },
-    });
+    if (commentExists.authorId !== userId)
+      throw new Error('Not authorized to perform this action.');
+    else {
+      const comment = await prisma.comment.delete({
+        where: {
+          id,
+        },
+        include: {
+          author: true,
+          post: true,
+        },
+      });
 
-    return comment;
+      // Publish the comment to the subscription
+      pubsub.publish(`comment ${comment.postId}`, {
+        comment: {
+          mutation: 'DELETED',
+          data: comment,
+        },
+      });
+
+      return comment;
+    }
   },
 };
 

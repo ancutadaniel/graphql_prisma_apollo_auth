@@ -1,37 +1,107 @@
+import getUserId from '../utils/getUserId.js';
+
 const Query = {
-  user: (parent, args, { user, prisma }, info) => {
-    return prisma.user.findUnique({
+  user: async (parent, args, { prisma, req }, info) => {
+    const userId = getUserId(req);
+    const user = await prisma.user.findUnique({
       where: {
-        id: user.id,
+        id: userId,
       },
-      include: {
-        posts: true,
-        comments: true,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        posts: {
+          select: {
+            id: true,
+            title: true,
+            body: true,
+            published: true,
+          },
+        },
+        comments: {
+          select: {
+            id: true,
+            text: true,
+          },
+        },
       },
     });
+
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    return user;
   },
-
-  post: (parent, args, { prisma }, info) =>
-    prisma.post.findUnique({
+  post: async (parent, args, { prisma, req }, info) => {
+    const userId = getUserId(req, false);
+    const { id } = args;
+    const posts = await prisma.post.findMany({
       where: {
-        id: args.id,
+        id,
+        OR: [
+          {
+            published: true,
+          },
+          {
+            authorId: userId,
+          },
+        ],
       },
-      include: {
-        author: true,
-        comments: true,
-      },
-    }),
+      select: {
+        id: true,
+        title: true,
+        body: true,
+        published: true,
 
-  allUsers: (parent, args, { prisma }, info) => {
+        author: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        comments: {
+          select: {
+            id: true,
+            text: true,
+          },
+        },
+      },
+    });
+
+    if (posts.length === 0) {
+      throw new Error('Post not found');
+    }
+
+    return posts[0];
+  },
+  allUsers: async (parent, args, { prisma, req }, info) => {
     // if query is provided, search for users by name or email
     if (args.query) {
-      return prisma.user.findMany({
+      return await prisma.user.findMany({
         where: {
-          OR: [{ email: args.query }, { name: args.query }],
+          OR: [{ name: args.query }],
         },
-        include: {
-          posts: true,
-          comments: true,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          posts: {
+            select: {
+              id: true,
+              title: true,
+              body: true,
+              published: true,
+            },
+          },
+          comments: {
+            select: {
+              id: true,
+              text: true,
+            },
+          },
         },
         orderBy: {
           name: 'asc',
@@ -39,52 +109,187 @@ const Query = {
       });
     }
     // otherwise, return all users
-    return prisma.user.findMany({
-      include: {
-        posts: true,
-        comments: true,
+    return await prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        posts: {
+          select: {
+            id: true,
+            title: true,
+            body: true,
+            published: true,
+          },
+        },
+        comments: {
+          select: {
+            id: true,
+            text: true,
+          },
+        },
       },
       orderBy: {
         name: 'asc',
       },
     });
   },
-
-  allPosts: (parent, args, { prisma }, info) => {
+  allPosts: async (parent, args, { prisma }, info) => {
     // if query is provided, search for posts by title or body
     if (args.query) {
-      return prisma.post.findMany({
+      return await prisma.post.findMany({
         where: {
+          published: true,
           OR: [{ title: args.query }, { body: args.query }],
         },
-        include: {
-          author: true,
-          comments: true,
+        select: {
+          id: true,
+          title: true,
+          body: true,
+          published: true,
+          author: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+          comments: {
+            select: {
+              id: true,
+              text: true,
+            },
+          },
         },
         orderBy: {
           updatedAt: 'desc',
         },
       });
     }
-
-    return prisma.post.findMany({
-      include: {
-        author: true,
-        comments: true,
+    return await prisma.post.findMany({
+      where: {
+        published: true,
+      },
+      select: {
+        id: true,
+        title: true,
+        body: true,
+        published: true,
+        author: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        comments: {
+          select: {
+            id: true,
+            text: true,
+          },
+        },
       },
       orderBy: {
         updatedAt: 'desc',
       },
     });
   },
-
-  allComments: (parent, args, { prisma }, info) =>
-    prisma.comment.findMany({
-      include: {
-        author: true,
-        post: true,
+  allComments: async (parent, args, { prisma }, info) =>
+    await prisma.comment.findMany({
+      select: {
+        id: true,
+        text: true,
+        author: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        post: {
+          select: {
+            id: true,
+            title: true,
+            body: true,
+            published: true,
+          },
+        },
       },
     }),
+  myPosts: async (parent, args, { prisma, req }, info) => {
+    const userId = getUserId(req);
+
+    if (args.query) {
+      const posts = await prisma.post.findMany({
+        where: {
+          authorId: userId,
+          OR: [{ title: args.query }, { body: args.query }],
+        },
+        select: {
+          id: true,
+          title: true,
+          body: true,
+          published: true,
+          author: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+          comments: {
+            select: {
+              id: true,
+              text: true,
+            },
+          },
+        },
+        orderBy: {
+          updatedAt: 'desc',
+        },
+      });
+
+      if (posts.length === 0) {
+        throw new Error('Posts not found');
+      }
+
+      return posts;
+    }
+
+    const posts = await prisma.post.findMany({
+      where: {
+        authorId: userId,
+      },
+      select: {
+        id: true,
+        title: true,
+        body: true,
+        published: true,
+        author: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        comments: {
+          select: {
+            id: true,
+            text: true,
+          },
+        },
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+
+    if (posts.length === 0) {
+      throw new Error('Posts not found');
+    }
+
+    return posts;
+  },
 };
 
 export default Query;
