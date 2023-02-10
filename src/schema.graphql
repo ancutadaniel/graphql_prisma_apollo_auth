@@ -1,18 +1,21 @@
 type Query {
-  allUsers(query: String): [User!]!
-  allPosts(query: String): [Post!]!
-  allComments(query: String): [Comment!]!
-  user(id: String!): User!
+  allUsers(query: String, take: Int, skip: Int): [User!]!
+  allPosts(query: String, take: Int, skip: Int): [Post!]!
+  myPosts(query: String, take: Int, skip: Int, cursor: String): [Post!]!
+  allComments(query: String, take: Int, skip: Int): [Comment!]!
+  user: User!
   post(id: String!): Post!
 }
 
 type User {
   id: String!
-  email: String!
+  email: String
   name: String
-  password: String!
+  password: String
   posts: [Post!]!
   comments: [Comment!]!
+  createdAt: String!
+  updatedAt: String!
 }
 
 type Post {
@@ -22,6 +25,8 @@ type Post {
   published: Boolean!
   author: User!
   comments: [Comment!]!
+  createdAt: String!
+  updatedAt: String!
 }
 
 type Comment {
@@ -29,19 +34,32 @@ type Comment {
   text: String!
   author: User!
   post: Post!
+  createdAt: String!
+  updatedAt: String!
 }
 
 # ======================  Mutations  ======================
 type Mutation {
-  createUser(data: CreateUserInput!): User!
-  updateUser(id: String!, data: UpdateUserInput!): User!
-  deleteUser(id: String!): User!
+  login(data: LoginUserInput!): AuthPayload!
+  createUser(data: CreateUserInput!): AuthPayload!
+  updateUser(data: UpdateUserInput!): User!
+  deleteUser: User!
   createPost(data: CreatePostInput!): Post!
   updatePost(id: String!, data: UpdatePostInput!): Post!
   deletePost(id: String!): Post!
   createComment(data: CreateCommentInput!): Comment!
   deleteComment(id: String!): Comment!
   updateComment(id: String!, data: UpdateCommentInput!): Comment!
+}
+
+type AuthPayload {
+  token: String!
+  user: User!
+}
+
+input LoginUserInput {
+  email: String!
+  password: String!
 }
 
 input CreateUserInput {
@@ -53,18 +71,17 @@ input CreateUserInput {
 input UpdateUserInput {
   email: String
   name: String
+  password: String
 }
 
 input CreatePostInput {
   title: String!
   body: String!
   published: Boolean!
-  authorId: String!
 }
 
 input CreateCommentInput {
   text: String!
-  authorId: String!
   postId: String!
 }
 
@@ -80,6 +97,7 @@ input UpdateCommentInput {
 
 # ======================  Subscriptions  ======================
 type Subscription {
+  myPost: PostSubscriptionPayload!
   post: PostSubscriptionPayload!
   comment(postId: ID!): CommentSubscriptionPayload!
 }

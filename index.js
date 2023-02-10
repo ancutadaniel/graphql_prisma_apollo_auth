@@ -2,35 +2,24 @@ import { ApolloServer } from 'apollo-server-express';
 import cors from 'cors';
 import express from 'express';
 import { expressjwt } from 'express-jwt';
-import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { readFile } from 'fs/promises';
 
-import Query from './src/resolvers/Query.js';
-import Mutation from './src/resolvers/Mutation.js';
-import Subscription from './src/resolvers/Subscription.js';
-
 // Transition to WebSocket server with graphql-ws
+import { createServer as createHttpServer } from 'http';
+import { ApolloServerPluginDrainHttpServer } from 'apollo-server-core';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { WebSocketServer } from 'ws';
-import { createServer as createHttpServer } from 'http';
 import { useServer as useWsServer } from 'graphql-ws/lib/use/ws';
-import { ApolloServerPluginDrainHttpServer } from 'apollo-server-core';
 
 import { PubSub } from 'graphql-subscriptions';
+import resolvers from './src/resolvers/index.js';
 
 const pubsub = new PubSub();
 const prisma = new PrismaClient();
 
 const JWT_SECRET = Buffer.from(process.env.JWT_SECRET, 'base64');
-
 const typeDefs = await readFile('./src/schema.graphql', 'utf8');
-
-const resolvers = {
-  Query,
-  Mutation,
-  Subscription,
-};
 
 const app = express();
 
@@ -44,43 +33,19 @@ app.use(
   })
 );
 
-app.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-
-  const user = await prisma.user.findUnique({
-    where: {
-      email,
-    },
-  });
-
-  if (user && user.password === password) {
-    const token = jwt.sign({ sub: user.id }, JWT_SECRET);
-    res.json({ token });
-  } else {
-    res.sendStatus(401);
-  }
+// Create a context function that returns the token from the request headers HTTP
+const getHttpContext = async ({ req }) => ({
+  prisma,
+  pubsub,
+  req,
 });
 
-const getHttpContext = async ({ req }) => {
-  // find the user by the id in the JWT token and add it to the context
-  // auth is added by express-jwt if the authorization header is present => req.auth Authorization header - Bearer token
-
-  const user =
-    req.auth && (await prisma.user.findUnique({ where: { id: req.auth.sub } }));
-
-  return { user };
-};
-
 // Create a context function that returns the token from the connection WebSocket headers
-const getWsContext = ({ connectionParams }) => {
-  const token = connectionParams?.accessToken;
-  if (token) {
-    // Verify the token and return the userId
-    const payload = jwt.verify(token, JWT_SECRET);
-    return { userId: payload.sub };
-  }
-  return {};
-};
+const getWsContext = ({ connectionParams }) => ({
+  prisma,
+  pubsub,
+  req: connectionParams,
+});
 
 // Create an HTTP server and pass our Express
 const httpServer = createHttpServer(app);
@@ -99,12 +64,24 @@ const schema = makeExecutableSchema({
 });
 
 // Use the WebSocket server to handle GraphQL subscriptions
-useWsServer({ schema, context: { getWsContext, prisma, pubsub } }, wsServer);
+useWsServer({ schema, context: getWsContext }, wsServer);
 
 const apolloServer = new ApolloServer({
   schema,
-  context: { getHttpContext, prisma, pubsub },
-  plugins: [ApolloServerPluginDrainHttpServer({ httpServer })],
+  context: getHttpContext,
+  plugins: [
+    ApolloServerPluginDrainHttpServer({ httpServer }),
+    // Proper shutdown for the WebSocket server.
+    {
+      async serverWillStart() {
+        return {
+          async drainServer() {
+            await serverCleanup.dispose();
+          },
+        };
+      },
+    },
+  ],
 });
 
 await apolloServer.start();
